@@ -1,0 +1,51 @@
+name: 배치1 매물수집
+
+# 배치1: 네이버 매물 수집 → 구글시트 『매물장』 전량 교체 적재
+# 주의: GitHub Actions 러너는 데이터센터 IP라 네이버가 차단/빈결과를 줄 수 있음 (PRD §11).
+#       0건 수집 시 코드가 시트를 건드리지 않으므로 시트 손상은 없음.
+
+on:
+  schedule:
+    # GitHub cron은 UTC 기준. 08:00 KST(UTC+9) = 23:00 UTC (전날).
+    # 배치2(08:30 KST)보다 먼저 실행되도록 30분 앞에 둔다.
+    - cron: '0 23 * * *'
+  workflow_dispatch:   # 수동 실행 버튼 (테스트용)
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v4
+
+      - name: 파이썬 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 의존성 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: 서비스 계정 키 파일 생성 (시크릿에서)
+        run: printf '%s' "$GCP_SA_KEY" > sa_key.json
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+
+      - name: 배치1 실행
+        env:
+          GSPREAD_KEY_FILE: sa_key.json
+          SPREADSHEET_ID: '1l6gYrwWySZyRCbcxBq0pxqpLauA6VClomSwC0UNtMQg'
+          SPREADSHEET_NAME: 네이버_단지별_부동단_매물
+          CONFIG_SHEET: 설정
+          MAEMULJANG_SHEET: 매물장
+          WATCH_LABEL: 감시단지
+          PYTHONUTF8: '1'
+        run: python main.py
+
+      - name: 키 파일 정리
+        if: always()
+        run: rm -f sa_key.json

@@ -1,0 +1,23 @@
+# 인증 정보 — 절대 커밋 금지 (§5)
+.env
+*.json
+navercomplexnosearch-*.json
+
+# 기존/임시 산출물
+네이버부동산_매물목록_*.xlsx
+*.xlsx
+
+# 파이썬
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 실행 로그
+logs/
+
+# 압축 산출물 (불필요)
+*.zip
+
+# CI가 시크릿에서 생성하는 키 (커밋 금지)
+sa_key.json
