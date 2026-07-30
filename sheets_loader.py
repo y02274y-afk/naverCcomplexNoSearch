@@ -72,11 +72,42 @@ def _open_spreadsheet():
 
 
 # ── 감시단지 읽기 (§4) ─────────────────────────────────────────────────────
-def read_watch_list():
-    """『설정』 시트의 `감시단지` 값을 파싱해 [{"complex_name","complex_no"}, ...] 반환.
+def _cell(row, idx):
+    """행 리스트의 idx 칸을 안전하게 읽는다 (구글시트는 뒤쪽 빈 칸을 잘라서 준다)."""
+    return row[idx].strip() if idx < len(row) else ""
 
-    형식: `단지명|단지코드`, 줄바꿈 또는 쉼표로 복수 등록.
-    형식이 잘못된 행은 건너뛰고 로그를 남긴다.
+
+def _read_watch_cells(grid):
+    """『설정』 그리드에서 감시단지 값 셀들을 순서대로 뽑는다.
+
+    `감시단지` 라벨 우측 셀부터 시작해, **라벨 칸이 빈 아래 행들을 계속 이어 읽는다.**
+    한 단지당 한 행으로 쓰는 게 기본이고, 목록은 다음 중 먼저 오는 곳에서 끝난다.
+      - 라벨 칸에 다른 항목명이 나온 행 (다음 설정 항목 시작)
+      - 값 칸이 빈 행 (목록 끝)
+    라벨을 못 찾으면 빈 리스트를 반환한다.
+    """
+    for r, row in enumerate(grid):
+        for c, cell in enumerate(row):
+            if cell.strip() != WATCH_LABEL:
+                continue
+            values = [_cell(row, c + 1)]
+            for below in grid[r + 1:]:
+                if _cell(below, c):        # 다른 설정 항목 — 감시단지 목록은 여기서 끝
+                    break
+                value = _cell(below, c + 1)
+                if not value:              # 값이 빈 행 — 목록 끝
+                    break
+                values.append(value)
+            return [v for v in values if v]
+    return []
+
+
+def read_watch_list():
+    """『설정』 시트의 `감시단지` 목록을 파싱해 [{"complex_name","complex_no"}, ...] 반환.
+
+    형식: `단지명|단지코드`. 단지 추가는 라벨 아래 행에 한 줄씩 쓰는 것이 기본이며,
+    한 셀 안에서 줄바꿈·쉼표로 여러 개를 쓰는 예전 형식도 그대로 인정한다.
+    형식이 잘못된 항목은 건너뛰고 로그를 남긴다.
     시트 읽기 실패 시 SheetError (호출부에서 즉시 중단 — §6).
     """
     sh = _open_spreadsheet()
@@ -86,22 +117,15 @@ def read_watch_list():
     except Exception as e:
         raise SheetError(f"『{CONFIG_SHEET}』 시트 읽기 실패: {e}") from e
 
-    # "감시단지" 라벨 셀을 찾아 우측 셀의 값을 읽는다.
-    raw_value = ""
-    for row in grid:
-        for i, cell in enumerate(row):
-            if cell.strip() == WATCH_LABEL:
-                if i + 1 < len(row):
-                    raw_value = row[i + 1]
-                break
-        if raw_value:
-            break
-
-    if not raw_value.strip():
+    cells = _read_watch_cells(grid)
+    if not cells:
         raise SheetError(f"『{CONFIG_SHEET}』 시트에서 `{WATCH_LABEL}` 값을 찾지 못했습니다.")
 
-    # 줄바꿈·쉼표로 분리
-    tokens = [t.strip() for t in raw_value.replace("\r", "\n").replace(",", "\n").split("\n")]
+    # 셀 하나에 줄바꿈·쉼표로 여러 개를 넣은 경우까지 펼친다 (구형 형식 호환)
+    tokens = []
+    for raw in cells:
+        tokens += [t.strip() for t in raw.replace("\r", "\n").replace(",", "\n").split("\n")]
+
     watch = []
     for token in tokens:
         if not token:
