@@ -3,6 +3,7 @@ sheets_loader.py — 구글시트 적재 계층 (신규)
 
 - 『설정』 시트의 `감시단지` 목록을 읽는다 (§4)
 - 『매물장』 시트를 전량 교체 적재한다 (§3.1 · §3.3)
+- 실행 결과를 『실행로그』에 단지별로 append 한다 (PRD 범위 외 · 운영 편의)
 
 인증: 구글 서비스 계정 키파일 (.env / 환경변수로 경로 지정, 소스 하드코딩 금지 — §5)
 """
@@ -41,6 +42,13 @@ SPREADSHEET_NAME = os.environ.get("SPREADSHEET_NAME", "네이버_단지별_부�
 CONFIG_SHEET = os.environ.get("CONFIG_SHEET", "설정")
 MAEMULJANG_SHEET = os.environ.get("MAEMULJANG_SHEET", "매물장")
 WATCH_LABEL = os.environ.get("WATCH_LABEL", "감시단지")
+# 실행로그 탭 — 원본 빈 탭(『시트1』)을 『실행로그』로 개명해 쓴다. 탭 이름을 바꾸면 .env 값도 함께 바꿔야 한다.
+LOG_SHEET = os.environ.get("LOG_SHEET", "실행로그")
+
+# 『실행로그』 헤더 — 실행 1회당 감시단지 1행씩 append
+LOG_HEADER = [
+    "실행시각", "배치", "단지코드", "단지", "결과", "수집매물", "적재행수", "소요초", "메시지",
+]
 
 
 class SheetError(Exception):
@@ -150,4 +158,35 @@ def replace_all(rows):
         raise SheetError(f"『{MAEMULJANG_SHEET}』 시트 쓰기 실패: {e}") from e
 
     logger.info("『%s』 전량 교체 완료: %d행 적재", MAEMULJANG_SHEET, len(rows))
+    return len(rows)
+
+
+# ── 실행로그 append (운영 편의 · PRD 범위 외) ──────────────────────────────
+def append_log(rows):
+    """『실행로그』에 행을 append 한다. 기존 행은 지우지 않는다 (누적).
+
+    rows: LOG_HEADER 순서의 2차원 리스트
+    로그는 부가 기능이므로 호출부(main)에서 예외를 삼켜 배치 본체를 죽이지 않는다.
+    """
+    if not rows:
+        return 0
+
+    sh = _open_spreadsheet()
+    try:
+        ws = sh.worksheet(LOG_SHEET)
+    except Exception as e:
+        raise SheetError(f"『{LOG_SHEET}』 시트 열기 실패: {e}") from e
+
+    end_col = rowcol_to_a1(1, len(LOG_HEADER)).rstrip("1")  # 예: 9 → "I"
+
+    try:
+        # 헤더 보증 (빈 탭 첫 실행 또는 헤더 훼손 시 재기록)
+        if ws.row_values(1) != LOG_HEADER:
+            ws.update(range_name=f"A1:{end_col}1", values=[LOG_HEADER],
+                      value_input_option="RAW")
+        ws.append_rows(rows, value_input_option="RAW", table_range="A1")
+    except Exception as e:
+        raise SheetError(f"『{LOG_SHEET}』 시트 쓰기 실패: {e}") from e
+
+    logger.info("『%s』 실행로그 %d행 기록", LOG_SHEET, len(rows))
     return len(rows)

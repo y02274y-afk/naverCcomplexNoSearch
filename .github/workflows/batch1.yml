@@ -44,6 +44,7 @@ jobs:
           CONFIG_SHEET: 설정
           MAEMULJANG_SHEET: 매물장
           WATCH_LABEL: 감시단지
+          LOG_SHEET: 실행로그
           PYTHONUTF8: '1'
         run: python main.py
 
