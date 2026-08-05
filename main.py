@@ -1,8 +1,12 @@
 """
 네이버 부동산 단지별 매물 수집 → 구글시트 『매물장』 적재 진입점 (배치 1)
 
-기존 수집 로직(naver_client)은 그대로 사용하고, 출력을 엑셀 → 구글시트 적재로 교체했다.
-  main → 『설정』 감시단지 읽기 → naver_client 수집 → field_mapper 변환 → sheets_loader 적재
+수집은 naver_api_client(httpx 직접 호출)가 맡고, 출력은 구글시트 『매물장』 적재다.
+  main → 『설정』 감시단지 읽기 → naver_api_client 수집 → field_mapper 변환 → sheets_loader 적재
+
+2026-08-05: 수집 경로를 Playwright(naver_client)에서 API 직접 호출로 교체했다.
+브라우저를 띄우지 않아 실행이 빠르고 결정적이다. 옛 Playwright 판은 네이버가 이
+API 를 닫을 때를 대비해 naver_client.py 에 남겨뒀다(현재 미사용).
 """
 
 import sys
@@ -16,10 +20,13 @@ from datetime import datetime
 # 윈도우 콘솔 인코딩 방지
 sys.stdout = io.TextIOWrapper(sys.stdout.detach(), encoding="utf-8", errors="replace")
 
-from naver_client import NaverRealEstateClient
-import field_mapper
+# sheets_loader 를 먼저 import 한다 — 이 모듈이 .env 를 환경변수로 올린다.
+# naver_api_client 의 NAVER_* 설정도 그 환경변수를 읽으므로 순서가 앞뒤로 바뀌면 안 된다.
 import sheets_loader
 from sheets_loader import SheetError
+
+from naver_api_client import NaverApiClient
+import field_mapper
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("Batch1")
@@ -33,47 +40,57 @@ def collect_all(watch_list):
       status: 성공 / 매물없음 / 실패
     단지 1곳 실패는 로그 남기고 계속한다 (§6).
     to_sheet_rows 는 complex_no/complex_name/articles 만 보므로 부가 키는 무해하다.
+
+    업소전화는 전 단지 목록을 받은 **뒤에** 한꺼번에 채운다. 상세 페이지를 업소마다
+    한 번씩 두드리는 부가 수집이라, 단지 사이에 끼워 넣으면 그쪽에서 429 를 맞았을 때
+    아직 못 받은 단지의 목록까지 말려든다 (naver_api_client 모듈 주석 참조).
     """
-    client = NaverRealEstateClient(headless=True)  # 헤드리스 — 브라우저 창을 띄우지 않는다 (§8.2)
     results = []
 
-    for target in watch_list:
-        cno = target["complex_no"]
-        cname = target["complex_name"]
-        print(f"\n▶ 수집 시작: {cname or '(이름미상)'} [{cno}]")
-        t0 = time.monotonic()
+    with NaverApiClient() as client:
+        for target in watch_list:
+            cno = target["complex_no"]
+            cname = target["complex_name"]
+            print(f"\n▶ 수집 시작: {cname or '(이름미상)'} [{cno}]")
+            t0 = time.monotonic()
+            try:
+                data = client.get_complex_data(cno)
+                articles = data.get("articles", [])
+                info = data.get("complex_info") or {}
+                resolved_name = info.get("complexName") or cname
+                elapsed = round(time.monotonic() - t0, 1)
+                if articles:
+                    print(f"  수집 완료: {len(articles)}개 매물 ({elapsed}초)")
+                    status, message = "성공", f"{len(articles)}개 매물 수집"
+                else:
+                    print(f"  등록된 매물 없음 (단지 {cno})")
+                    status, message = "매물없음", "네이버에 등록된 매물 없음"
+                results.append({
+                    "complex_no": cno,
+                    "complex_name": resolved_name,
+                    "articles": articles,
+                    "status": status,
+                    "elapsed": elapsed,
+                    "message": message,
+                })
+            except Exception as e:
+                elapsed = round(time.monotonic() - t0, 1)
+                logger.error("단지 %s 수집 실패: %s", cno, e)
+                results.append({
+                    "complex_no": cno,
+                    "complex_name": cname,
+                    "articles": [],
+                    "status": "실패",
+                    "elapsed": elapsed,
+                    # 예외 첫 줄만 — 셀이 스택트레이스로 뒤덮이지 않게
+                    "message": str(e).splitlines()[0][:200] if str(e).strip() else type(e).__name__,
+                })
+
+        # 부가 수집. 실패해도 목록은 이미 손에 있으므로 배치를 멈추지 않는다.
         try:
-            data = client.get_complex_data(cno, max_scrolls=40)
-            articles = data.get("articles", [])
-            info = data.get("complex_info") or {}
-            resolved_name = info.get("complexName") or cname
-            elapsed = round(time.monotonic() - t0, 1)
-            if articles:
-                print(f"  수집 완료: {len(articles)}개 매물 ({elapsed}초)")
-                status, message = "성공", f"{len(articles)}개 매물 수집"
-            else:
-                print(f"  등록된 매물 없음 (단지 {cno})")
-                status, message = "매물없음", "네이버에 등록된 매물 없음"
-            results.append({
-                "complex_no": cno,
-                "complex_name": resolved_name,
-                "articles": articles,
-                "status": status,
-                "elapsed": elapsed,
-                "message": message,
-            })
+            client.fill_office_tels(r["articles"] for r in results)
         except Exception as e:
-            elapsed = round(time.monotonic() - t0, 1)
-            logger.error("단지 %s 수집 실패: %s", cno, e)
-            results.append({
-                "complex_no": cno,
-                "complex_name": cname,
-                "articles": [],
-                "status": "실패",
-                "elapsed": elapsed,
-                # 예외 첫 줄만 — 셀이 스택트레이스로 뒤덮이지 않게
-                "message": str(e).splitlines()[0][:200] if str(e).strip() else type(e).__name__,
-            })
+            logger.warning("업소전화 수집 중 예외(무시하고 계속): %s", e)
 
     return results
 

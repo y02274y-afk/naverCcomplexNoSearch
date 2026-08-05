@@ -5,9 +5,9 @@ name: 배치1 매물수집
 #       0건 수집 시 코드가 시트를 건드리지 않으므로 시트 손상은 없음.
 
 on:
-  # 자동 스케줄 비활성화: 네이버가 GitHub 데이터센터 IP를 차단(ERR_CONNECTION_RESET)하므로
-  # 클라우드 정기 실행은 불가. 로컬 PC 작업 스케줄러로 수집한다.
-  # (필요 시 아래 schedule 주석을 풀면 재활성화. 단 IP 차단으로 실패함)
+  # 자동 스케줄 비활성화: 네이버가 GitHub 데이터센터 IP를 차단하므로(Playwright 시절
+  # ERR_CONNECTION_RESET) 클라우드 정기 실행은 불가. 로컬 PC 작업 스케줄러로 수집한다.
+  # API 직접 호출로 바꾼 뒤 러너에서 되는지는 아직 확인 안 함 — 수동 실행으로 시험해볼 것.
   # schedule:
   #   - cron: '0 23 * * *'   # 08:00 KST
   workflow_dispatch:   # 수동 실행 버튼만 유지 (프록시/자가호스트 러너 테스트용)
@@ -29,7 +29,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          python -m playwright install --with-deps chromium
+          # 수집이 API 직접 호출로 바뀌어 브라우저 바이너리는 받지 않는다 (2026-08-05).
 
       - name: 서비스 계정 키 파일 생성 (시크릿에서)
         run: printf '%s' "$GCP_SA_KEY" > sa_key.json
